@@ -1,0 +1,27 @@
+[package]
+name = "deep-learning-demo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+plotters = "0.3"
+
+[[bin]]
+name = "main"
+path = "src/main.rs"
+
+[[bin]]
+name = "sigmoid"
+path = "src/bin/sigmoid.rs"
+
+[[bin]]
+name = "tanh"
+path = "src/bin/tanh.rs"
+
+[[bin]]
+name = "relu"
+path = "src/bin/relu.rs"
+
+[[bin]]
+name = "softmax"
+path = "src/bin/softmax.rs"
