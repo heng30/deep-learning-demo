@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+approx = "0.5"
 ndarray = "0.16"
 plotters = "0.3"
 ndarray-rand = "0.15"
-
-# tch = "0.20"
+tch = { version = "0.20", features = ["download-libtorch"] }
 
 [[bin]]
 name = "main"
@@ -37,3 +37,11 @@ path = "src/bin/initializer.rs"
 [[bin]]
 name = "nn-xor"
 path = "src/bin/nn-xor.rs"
+
+[[bin]]
+name = "sigmoid-backward"
+path = "src/bin/sigmoid-backward.rs"
+
+[[bin]]
+name = "tch-demo"
+path = "src/bin/tch-demo.rs"

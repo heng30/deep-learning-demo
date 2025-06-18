@@ -18,5 +18,8 @@ debug-show:
 realse:
 	cargo build --release --bin $(bin)
 
+nix-shell:
+	nix-shell
+
 clean:
 	cargo clean

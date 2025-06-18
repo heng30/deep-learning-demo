@@ -37,7 +37,8 @@ pub struct DenseLayer {
     pub weights: Array2<f32>,
     pub biases: Array1<f32>,
     pub activation: Activation,
-    pub input: Option<ArrayD<f32>>,  // 保存前向传播输入用于反向传播
+    pub input: Option<ArrayD<f32>>, // 保存前向传播输入用于反向传播
+    pub linear_output: Option<ArrayD<f32>>, // 保存前向传播wx+b的值,用于反向传播
     pub output: Option<ArrayD<f32>>, // 保存前向传播输出
 }
 
@@ -55,6 +56,7 @@ impl DenseLayer {
             biases,
             activation,
             input: None,
+            linear_output: None,
             output: None,
         }
     }
@@ -63,13 +65,11 @@ impl DenseLayer {
         // 将输入保存用于反向传播
         self.input = Some(input.clone());
 
-        // println!("==================");
-        // println!("{:?}", input);
-        // println!("==================");
-
         // 计算线性部分: Wx + b
         let input_2d = input.clone().into_dimensionality::<Ix2>().unwrap();
         let linear_output = input_2d.dot(&self.weights) + &self.biases;
+
+        self.linear_output = Some(linear_output.clone().into_dyn());
 
         // 应用激活函数
         let output = self.activation.apply(&linear_output.into_dyn());
@@ -81,25 +81,27 @@ impl DenseLayer {
     pub fn backward(&mut self, grad_output: &ArrayD<f32>, learning_rate: f32) -> ArrayD<f32> {
         // 获取前向传播保存的值
         let input = self.input.as_ref().unwrap();
-        let output = self.output.as_ref().unwrap();
+        let linear_output = self.linear_output.as_ref().unwrap();
 
         // 计算激活函数的导数
-        let activation_derivative = self.activation.derivative(output);
+        let activation_derivative = self.activation.derivative(linear_output);
 
-        // 计算当前层的误差
+        // 计算当前层的误差, 按照矩阵对应位置一一相乘，不是矩阵乘法
         let delta = grad_output * &activation_derivative;
 
         // 将输入和delta转换为2D数组以便矩阵运算
         let input_2d = input.clone().into_dimensionality::<Ix2>().unwrap();
         let delta_2d = delta.clone().into_dimensionality::<Ix2>().unwrap();
 
-        // 计算权重梯度
+        // 计算权重梯度。`z = wx + b`，对`w`求导就是`x`
+        // 这里要转置是因为，每一行对应的是同一组数据与不同神经元计算得到的。而delta_2d每一列中的元素对应一组的梯度。出来的结果是，不同组数据对相同权重值的梯度和
         let weights_grad = input_2d.t().dot(&delta_2d);
 
-        // 计算偏置梯度 (对batch取平均)
+        // 计算偏置梯度 (对batch取平均)，沿着列求均值
         let biases_grad = delta_2d.mean_axis(ndarray::Axis(0)).unwrap();
 
-        // 计算传递到前一层的梯度
+        // 计算传递到前一层的梯度。`z = wx + b`，对`x`求导就是`w`
+        // 每一组输入数据占据一行输入梯度
         let grad_input = delta_2d.dot(&self.weights.t()).into_dyn();
 
         // 更新权重和偏置
@@ -139,6 +141,7 @@ impl NeuralNetwork {
         }
     }
 
+    // 全批量梯度下降
     pub fn train(
         &mut self,
         inputs: &Array2<f32>,
@@ -149,16 +152,16 @@ impl NeuralNetwork {
         for epoch in 0..epochs {
             let mut total_loss = 0.0;
 
-            // 简单实现: 全批量梯度下降
             // 前向传播
             let predictions = self.forward(&inputs.clone().into_dyn());
 
             // 计算损失 (均方误差)
+            // loss = (1/4) * [(p1 - t1)^2 + (p2 - t2)^2 + (p3 -t3)^2 + (p4 - t4)^2]
             let diff = &predictions - &targets.clone().into_dyn();
             let loss = diff.mapv(|x| x.powi(2)).mean().unwrap();
             total_loss += loss;
 
-            // 反向传播
+            // 反向传播，对loss函数求梯度
             let grad_output = 2.0 * diff / inputs.shape()[0] as f32;
             self.backward(&grad_output, learning_rate);
 
@@ -171,26 +174,26 @@ impl NeuralNetwork {
 
 /// 训练一个简单的XOR网络
 fn main() {
-    // 创建网络结构
+    // 创建网络结构。整个网络的结构为: 2x4X1。
+    // 输入层为2各神经元。只有一个隐藏层，有4个神经元。输出层只有一个神经元
     let mut network = NeuralNetwork::new();
-    network.add_layer(DenseLayer::new(2, 4, Activation::ReLU)); // 隐藏层
+    network.add_layer(DenseLayer::new(2, 4, Activation::ReLU)); // 隐藏层, 一次能够处理4组数据
     network.add_layer(DenseLayer::new(4, 1, Activation::Sigmoid)); // 输出层
 
-    // 训练数据 (XOR问题)
+    // 训练数据，一次批处理4组数据
     let inputs =
         Array::from_shape_vec((4, 2), vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]).unwrap();
 
     let targets = Array::from_shape_vec((4, 1), vec![0.0, 1.0, 1.0, 0.0]).unwrap();
 
     // 训练网络
-    network.train(&inputs, &targets, 5000, 0.05);
+    network.train(&inputs, &targets, 10000, 0.05);
 
     // 测试网络
     println!("\nTesting trained network:");
     for i in 0..4 {
-        let input = inputs.slice(s![i, ..]).to_owned().into_dyn();
+        let input = inputs.slice(s![i, ..]).to_owned().into_dyn(); // 每次获取1行
         let input = input.to_shape((1, 2)).unwrap().to_owned().into_dyn();
-        // println!("xxxxxxx: {:?}", input);
         let output = network.forward(&input);
         println!("Input: {:?}, Output: {:?}\n", input, output);
     }
