@@ -45,3 +45,11 @@ path = "src/bin/sigmoid-backward.rs"
 [[bin]]
 name = "tch-demo"
 path = "src/bin/tch-demo.rs"
+
+[[bin]]
+name = "tch-xor"
+path = "src/bin/tch-xor.rs"
+
+[[bin]]
+name = "weight-mean"
+path = "src/bin/weight-mean.rs"
