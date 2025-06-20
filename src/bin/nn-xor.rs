@@ -34,12 +34,16 @@ impl Activation {
 
 // 神经网络层
 pub struct DenseLayer {
-    pub weights: Array2<f32>,
-    pub biases: Array1<f32>,
-    pub activation: Activation,
-    pub input: Option<ArrayD<f32>>, // 保存前向传播输入用于反向传播
-    pub linear_output: Option<ArrayD<f32>>, // 保存前向传播wx+b的值,用于反向传播
+    pub weights: Array2<f32>,   // 梯度
+    pub biases: Array1<f32>,    // 偏置
+    pub activation: Activation, // 激活函数
+
+    pub input: Option<ArrayD<f32>>,  // 保存前向传播输入用于反向传播
     pub output: Option<ArrayD<f32>>, // 保存前向传播输出
+    pub linear_output: Option<ArrayD<f32>>, // 保存前向传播wx+b的值,用于反向传播
+    pub weights_grad: Option<Array2<f32>>, // 移动平均累计历史梯度，用于优化梯度
+    pub squared_grad: Option<Array2<f32>>, // RMSProp使用
+    pub adaptive_learning_rate: Option<ArrayD<f32>>, // 自适应学习率
 }
 
 impl DenseLayer {
@@ -56,8 +60,11 @@ impl DenseLayer {
             biases,
             activation,
             input: None,
-            linear_output: None,
             output: None,
+            linear_output: None,
+            weights_grad: None,
+            squared_grad: None,
+            adaptive_learning_rate: None,
         }
     }
 
@@ -78,7 +85,13 @@ impl DenseLayer {
         output
     }
 
-    pub fn backward(&mut self, grad_output: &ArrayD<f32>, learning_rate: f32) -> ArrayD<f32> {
+    pub fn backward(
+        &mut self,
+        grad_output: &ArrayD<f32>,
+        momentum: f32,
+        learning_rate: f32,
+        _epochs: usize,
+    ) -> ArrayD<f32> {
         // 获取前向传播保存的值
         let input = self.input.as_ref().unwrap();
         let linear_output = self.linear_output.as_ref().unwrap();
@@ -104,9 +117,60 @@ impl DenseLayer {
         // 每一组输入数据占据一行输入梯度
         let grad_input = delta_2d.dot(&self.weights.t()).into_dyn();
 
+        // 优化梯度和学习率
+        match &self.weights_grad.clone() {
+            Some(wg) => {
+                // 优化梯度: 移动加权平均动量法
+                let weights_grad_momentum = momentum * wg + (1. - momentum) * &weights_grad;
+                self.weights_grad = Some(weights_grad_momentum.clone());
+
+                // FIXME: 算法会造成学习率过大
+                // RMSProp优化学习率
+                // let squared_grad = match &self.squared_grad {
+                //     Some(sg) => momentum * sg + (1.0 - momentum) * weights_grad.mapv(|g| g.powi(2)),
+                //     None => (1.0 - momentum) * weights_grad.mapv(|g| g.powi(2)),
+                // };
+                // self.squared_grad = Some(squared_grad.clone());
+                //
+                // // println!("{:?}", self.squared_grad);
+                //
+                // // 参数偏差修正
+                // let weights_grad_momentum =
+                //     weights_grad_momentum / (1.0 - momentum.powf(epochs as f32));
+                //
+                // let squared_grad = squared_grad / (1.0 - momentum.powf(epochs as f32));
+                //
+                // let adaptive_learning_rate = match &self.adaptive_learning_rate {
+                //     Some(lr) => {
+                //         let lr = lr
+                //             - (learning_rate / (squared_grad.mapv(|sg| sg.sqrt()) + 1e-6))
+                //                 * &weights_grad_momentum;
+                //
+                //         lr.into_dyn()
+                //     }
+                //     None => {
+                //         let lr = -learning_rate / (squared_grad.mapv(|sg| sg.sqrt()) + 1e-6)
+                //             * &weights_grad_momentum;
+                //         lr.into_dyn()
+                //     }
+                // };
+                //
+                // self.adaptive_learning_rate = Some(adaptive_learning_rate);
+                // println!("{:?}", self.adaptive_learning_rate);
+            }
+            None => {
+                self.weights_grad = Some(weights_grad);
+            }
+        };
+
         // 更新权重和偏置
-        self.weights -= &(weights_grad * learning_rate);
-        self.biases -= &(biases_grad * learning_rate);
+        let adaptive_learning_rate = match &self.adaptive_learning_rate {
+            Some(lr) => lr,
+            None => &(Array::ones(self.weights.shape()) * learning_rate).into_dyn(),
+        };
+
+        self.weights -= &(self.weights_grad.as_ref().unwrap() * adaptive_learning_rate);
+        self.biases -= &(biases_grad * adaptive_learning_rate.mean_axis(ndarray::Axis(0)).unwrap());
 
         grad_input
     }
@@ -134,10 +198,16 @@ impl NeuralNetwork {
         output
     }
 
-    pub fn backward(&mut self, grad_output: &ArrayD<f32>, learning_rate: f32) {
+    pub fn backward(
+        &mut self,
+        grad_output: &ArrayD<f32>,
+        momentum: f32,
+        learning_rate: f32,
+        epochs: usize,
+    ) {
         let mut grad = grad_output.clone();
         for layer in self.layers.iter_mut().rev() {
-            grad = layer.backward(&grad, learning_rate);
+            grad = layer.backward(&grad, momentum, learning_rate, epochs);
         }
     }
 
@@ -147,6 +217,7 @@ impl NeuralNetwork {
         inputs: &Array2<f32>,
         targets: &Array2<f32>,
         epochs: usize,
+        momentum: f32,
         learning_rate: f32,
     ) {
         for epoch in 0..epochs {
@@ -163,7 +234,7 @@ impl NeuralNetwork {
 
             // 反向传播，对loss函数求梯度
             let grad_output = 2.0 * diff / inputs.shape()[0] as f32;
-            self.backward(&grad_output, learning_rate);
+            self.backward(&grad_output, momentum, learning_rate, epoch);
 
             if epoch % 100 == 0 {
                 println!("Epoch {}, Loss: {}", epoch, total_loss);
@@ -187,7 +258,7 @@ fn main() {
     let targets = Array::from_shape_vec((4, 1), vec![0.0, 1.0, 1.0, 0.0]).unwrap();
 
     // 训练网络
-    network.train(&inputs, &targets, 10000, 0.05);
+    network.train(&inputs, &targets, 3000, 0.9, 0.1);
 
     // 测试网络
     println!("\nTesting trained network:");
