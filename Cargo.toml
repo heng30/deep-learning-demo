@@ -53,3 +53,7 @@ path = "src/bin/tch-xor.rs"
 [[bin]]
 name = "weight-mean"
 path = "src/bin/weight-mean.rs"
+
+[[bin]]
+name = "tch-dropout"
+path = "src/bin/tch-dropout.rs"
