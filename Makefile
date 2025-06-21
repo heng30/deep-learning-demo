@@ -4,19 +4,20 @@ bin ?= main
 image_viewer ?= swayimg
 output_image ?= target/output.png
 
-all: bins
-
-bins:
-	cargo build --bins
+all:
+	cargo build --examples
 
 debug:
-	cargo run --bin $(bin)
+	cargo run
 
 debug-show:
-	cargo run --bin $(bin) && if [ -f $(output_image) ]; then $(image_viewer) $(output_image); fi
+	cargo run $(bin) && if [ -f $(output_image) ]; then $(image_viewer) $(output_image); fi
 
-realse:
-	cargo build --release --bin $(bin)
+example:
+	cargo run --example $(bin)
+
+example-show:
+	cargo run --example $(bin) && if [ -f $(output_image) ]; then $(image_viewer) $(output_image); fi
 
 nix-shell:
 	nix-shell
