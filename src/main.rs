@@ -1,37 +1,287 @@
-use tch::{Device, Kind, Tensor};
+use anyhow::{Context, Result};
+use csv::Reader;
+use std::collections::HashSet;
+use tch::{
+    Device, Kind, Tensor,
+    nn::{self, Module, OptimizerConfig},
+};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+// 使用100个元素进行验证
+const TEST_COUNTS: usize = 100;
+const DATA_PATH: &'static str = "data/cell-phone-price-prediction.csv";
+const MODEL_PATH: &'static str = "./target/cell-phone-price.pth";
+
+fn main() -> Result<()> {
     tch::manual_seed(42);
 
-    // 正常数据
-    let mut w = Tensor::randn([15, 1], (Kind::Float, Device::Cpu)).requires_grad_(true);
+    let phone_price = load_data(DATA_PATH)?;
 
-    let x = Tensor::randint(10, [5, 15], (Kind::Int64, Device::Cpu)).to_kind(Kind::Float);
+    // train(&phone_price)?;
 
-    x.matmul(&w).sum(Kind::Float).backward();
-
-    println!(
-        "Gradient:\n{:?}",
-        w.grad()
-            .reshape([1, -1])
-            .squeeze()
-            .iter::<f64>()?
-            .collect::<Vec<_>>()
-    );
-
-    // Dropout
-    w.zero_grad();
-    let x = x.dropout(0.8, true);
-    x.matmul(&w).sum(Kind::Float).backward();
-
-    println!(
-        "\nDropout Gradient:\n{:?}",
-        w.grad()
-            .reshape([1, -1])
-            .squeeze()
-            .iter::<f64>()?
-            .collect::<Vec<_>>()
-    );
+    test(&phone_price)?;
 
     Ok(())
+}
+
+fn train(phone_price: &PhonePrice) -> Result<()> {
+    // 获取维度
+    let features_dim = phone_price.features.first().unwrap().len() as i64;
+
+    let labels_dim = phone_price
+        .labels
+        .iter()
+        .copied()
+        .collect::<HashSet<i64>>()
+        .len() as i64;
+
+    // ==================== 训练神经网络 ================
+    let batch_size = 8;
+    let train_counts = phone_price.features.len() - TEST_COUNTS;
+
+    let mut features = phone_price.features[..train_counts]
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let mut labels = phone_price.labels[..train_counts]
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let vs = nn::VarStore::new(Device::cuda_if_available());
+    let net = Net::new(&vs.root(), features_dim, labels_dim);
+    let mut opt = nn::Adam::default().build(&vs, 1e-1).unwrap();
+
+    // 训练循环
+    for epoch in 1..=50 {
+        let rand_rows = Tensor::randint(
+            train_counts as i64 - 1,
+            [1, train_counts as i64],
+            (Kind::Int64, Device::Cpu),
+        );
+
+        // 打乱数据
+        for (index, item) in rand_rows.squeeze().iter::<i64>()?.enumerate() {
+            let item = item as usize;
+
+            if index == item {
+                continue;
+            }
+
+            features.swap(index, item);
+            labels.swap(index, item);
+        }
+
+        let mut total_loss = 0.0; // 累计总损失
+        let mut total_num = 0; // 累计总样本数量
+        let mut correct = 0; // 正确数量
+
+        // 按批次进行训练
+        for batch_index in 0..(train_counts / batch_size) {
+            let start_index = batch_index * batch_size;
+            let end_index = start_index + batch_size;
+
+            // 训练集
+            let train_dataset = Tensor::from_slice2(&features[start_index..end_index])
+                .to_kind(Kind::Float)
+                .to_device(Device::cuda_if_available());
+
+            // 验证集
+            let vaild_dataset = Tensor::from_slice(&labels[start_index..end_index])
+                .to_kind(Kind::Int64)
+                .to_device(Device::cuda_if_available());
+
+            let output = net.forward(&train_dataset);
+
+            // 计算平均损失, 会先对数据进行softmax，再进行叉熵计算
+            let loss = output.cross_entropy_loss::<Tensor>(
+                &vaild_dataset,       // 类别索引标签
+                None,                 // 不设置权重
+                tch::Reduction::Mean, // 损失求平均
+                -1,                   // 忽略无效类别（默认）
+                0.,                   // label_smoothing（默认0）
+            );
+
+            // 梯度清零
+            opt.zero_grad();
+
+            // 方向传播并更新参数
+            opt.backward_step(&loss);
+
+            // 累计总样本数量
+            total_num += batch_size;
+
+            // 累计总损失
+            total_loss += loss.double_value(&[]) * batch_size as f64;
+
+            // 求出最大概率类别的下标
+            let predict = output.argmax(-1, true);
+
+            // 获取正确的类别
+            for index in 0..batch_size {
+                let index = index as i64;
+                if predict.int64_value(&[index]) == vaild_dataset.int64_value(&[index]) {
+                    correct += 1;
+                }
+            }
+
+            // std::process::exit(0);
+
+            if batch_index % 10 == 0 {
+                println!(
+                    "Epoch: {:3}  Batch_index: {:3}  Loss: {:.6} Correct: {:.3}",
+                    epoch,
+                    batch_index,
+                    total_loss / total_num as f64,
+                    correct as f64 / total_num as f64
+                );
+            }
+        }
+    }
+
+    vs.save(MODEL_PATH)?;
+
+    Ok(())
+}
+
+// 测试
+fn test(phone_price: &PhonePrice) -> Result<()> {
+    // 获取维度
+    let features_dim = phone_price.features.first().unwrap().len() as i64;
+
+    let labels_dim = phone_price
+        .labels
+        .iter()
+        .copied()
+        .collect::<HashSet<i64>>()
+        .len() as i64;
+
+    // 构建测试数据
+    let test_index = phone_price.features.len() - TEST_COUNTS;
+
+    let test_dataset = Tensor::from_slice2(&phone_price.features[test_index..])
+        .to_kind(Kind::Float)
+        .to_device(Device::cuda_if_available());
+
+    let vaild_dataset = Tensor::from_slice(&phone_price.labels[test_index..])
+        .to_kind(Kind::Int64)
+        .to_device(Device::cuda_if_available());
+
+    // 运行模型
+    let mut vs = nn::VarStore::new(Device::cuda_if_available());
+    vs.load(MODEL_PATH)?;
+
+    let net = Net::new(&vs.root(), features_dim, labels_dim);
+    let output = net.forward(&test_dataset);
+
+    // 求出最大概率类别的下标
+    let predict = output.argmax(-1, true);
+    let mut correct = 0;
+
+    // 获取正确的类别
+    for index in 0..TEST_COUNTS {
+        let index = index as i64;
+        if predict.int64_value(&[index]) == vaild_dataset.int64_value(&[index]) {
+            correct += 1;
+        }
+    }
+
+    println!("Test Correct: {:.3}", correct as f64 / TEST_COUNTS as f64);
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct PhonePrice {
+    #[allow(unused)]
+    headers: Vec<String>,
+    features: Vec<Vec<f64>>,
+    labels: Vec<i64>,
+}
+
+fn load_data<A: AsRef<std::path::Path>>(path: A) -> Result<PhonePrice> {
+    let file = std::fs::File::open(path.as_ref())?;
+    let mut rdr = Reader::from_reader(file);
+
+    // 获取头信息（可选）
+    let headers = rdr.headers()?.iter().map(String::from).collect::<Vec<_>>();
+
+    // 用于存储特征和标签
+    let mut features = Vec::new();
+    let mut labels = Vec::new();
+
+    // 记录第一行的元素数量，用于后续检查
+    let mut expected_len = 0;
+
+    for (i, result) in rdr.records().enumerate() {
+        let record = result?;
+
+        // 如果是第一行，设置期望的长度
+        if i == 0 {
+            expected_len = record.len();
+        }
+
+        // 检查每行的元素数量是否一致
+        if record.len() != expected_len {
+            anyhow::bail!(format!(
+                "Line {} has {} elements, expected {}",
+                i + 1,
+                record.len(),
+                expected_len
+            ));
+        }
+
+        // 分割特征和标签
+        // 特征是从第一个到倒数第二个元素
+        let feature_values: Vec<f64> = record
+            .iter()
+            .take(record.len() - 1)
+            .map(|s| s.parse().unwrap_or(0.0))
+            .collect();
+
+        // 标签是最后一个元素
+        let label = record
+            .iter()
+            .last()
+            .with_context(|| "Empty record")?
+            .parse()
+            .unwrap_or(0);
+
+        features.push(feature_values);
+        labels.push(label);
+    }
+
+    Ok(PhonePrice {
+        headers,
+        features,
+        labels,
+    })
+}
+
+// 定义神经网络结构
+#[derive(Debug)]
+struct Net {
+    fc1: nn::Linear,
+    fc2: nn::Linear,
+    fc3: nn::Linear,
+}
+
+impl Net {
+    fn new(vs: &nn::Path, features_dim: i64, labels_dim: i64) -> Self {
+        let fc1 = nn::linear(vs, features_dim, 128, Default::default()); // 输入层到隐藏层
+        let fc2 = nn::linear(vs, 128, 256, Default::default()); // 隐藏层
+        let fc3 = nn::linear(vs, 256, labels_dim, Default::default()); // 隐藏层到输出层
+
+        Net { fc1, fc2, fc3 }
+    }
+}
+
+impl Module for Net {
+    fn forward(&self, xs: &Tensor) -> Tensor {
+        let xs = self.fc1.forward(xs).sigmoid();
+        let xs = self.fc2.forward(&xs).sigmoid();
+
+        // 因为cross_entropy_loss已经对数据进行softmax，这里就不需要使用`sigmoid`函数了
+        self.fc3.forward(&xs)
+    }
 }
