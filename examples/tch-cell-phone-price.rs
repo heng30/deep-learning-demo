@@ -11,6 +11,7 @@ const TEST_COUNTS: usize = BATCH_SIZE * 10; // 使用80个元素进行验证
 const DATA_PATH: &'static str = "data/cell-phone-price-prediction.csv";
 const MODEL_PATH: &'static str = "target/cell-phone-price.pth";
 
+// 无法解决过拟合的问题
 fn main() -> Result<()> {
     tch::manual_seed(0);
 
