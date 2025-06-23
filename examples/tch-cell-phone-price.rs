@@ -7,18 +7,17 @@ use tch::{
 };
 
 const BATCH_SIZE: usize = 8;
-const TEST_COUNTS: usize = BATCH_SIZE * 10; // 使用80个元素进行验证
-const DATA_PATH: &'static str = "data/cell-phone-price-prediction.csv";
-const MODEL_PATH: &'static str = "target/cell-phone-price.pth";
+const VALIDATE_COUNTS: usize = BATCH_SIZE * 10; // 使用80个元素进行验证
+const TEST_COUNTS: usize = BATCH_SIZE * 10; // 使用80个元素进行测试
+const DATA_PATH: &str = "data/cell-phone-price-prediction.csv";
+const MODEL_PATH: &str = "target/cell-phone-price.tch";
 
-// 无法解决过拟合的问题
 fn main() -> Result<()> {
     tch::manual_seed(0);
 
     let phone_price = load_data(DATA_PATH)?;
 
     train(&phone_price)?;
-
     test(&phone_price)?;
 
     Ok(())
@@ -36,7 +35,7 @@ fn train(phone_price: &PhonePrice) -> Result<()> {
         .len() as i64;
 
     // ==================== 训练神经网络 ================
-    let train_counts = phone_price.features.len() - TEST_COUNTS;
+    let train_counts = phone_price.features.len() - VALIDATE_COUNTS - TEST_COUNTS;
 
     let mut features = phone_price.features[..train_counts]
         .iter()
@@ -52,29 +51,18 @@ fn train(phone_price: &PhonePrice) -> Result<()> {
     let net = Net::new(&vs.root(), features_dim, labels_dim);
     let mut opt = nn::Adam::default().build(&vs, 1e-4).unwrap();
 
+    // 每轮验证模型，避免过拟合
+    let mut best_validate_acc = 0.0;
+    let mut no_improve_epochs = 0;
+
     // 训练循环
     for epoch in 1..=50 {
-        let rand_rows = Tensor::randint(
-            train_counts as i64 - 1,
-            [1, train_counts as i64],
-            (Kind::Int64, Device::Cpu),
-        );
-
-        // 打乱数据
-        for (index, item) in rand_rows.squeeze().iter::<i64>()?.enumerate() {
-            let item = item as usize;
-
-            if index == item {
-                continue;
-            }
-
-            features.swap(index, item);
-            labels.swap(index, item);
-        }
-
-        let mut total_loss = 0.0; // 累计总损失
-        let mut total_num = 0; // 累计总样本数量
         let mut correct = 0; // 正确数量
+        let mut total_num = 0; // 累计总样本数量
+        let mut total_loss = 0.0; // 累计总损失
+
+        // 打乱训练数据数据
+        suffle_tensor_rows(&mut features[..train_counts], &mut labels[..train_counts])?;
 
         // 按批次进行训练
         for batch_index in 0..(train_counts / BATCH_SIZE) {
@@ -96,7 +84,7 @@ fn train(phone_price: &PhonePrice) -> Result<()> {
 
             let output = net.forward(&train_dataset);
 
-            // 计算平均损失, 会先对数据进行softmax，再进行叉熵计算
+            // 计算交叉熵损失(在分类认为中常用), 会先对数据进行softmax，再进行叉熵计算
             let loss = output.cross_entropy_loss::<Tensor>(
                 &vaild_dataset,       // 类别索引标签
                 None,                 // 不设置权重
@@ -138,6 +126,22 @@ fn train(phone_price: &PhonePrice) -> Result<()> {
                 );
             }
         }
+
+        // 每个epoch结束后在验证集上测试
+        let validate_acc = validate(&net, &phone_price);
+        println!("Epoch {} validate accuracy: {:.3}", epoch, validate_acc);
+
+        // 早停逻辑
+        if validate_acc > best_validate_acc {
+            best_validate_acc = validate_acc;
+            no_improve_epochs = 0;
+        } else {
+            no_improve_epochs += 1;
+            if no_improve_epochs >= 3 {
+                println!("Early stopping at epoch {}", epoch);
+                break;
+            }
+        }
     }
 
     vs.save(MODEL_PATH)?;
@@ -145,11 +149,47 @@ fn train(phone_price: &PhonePrice) -> Result<()> {
     Ok(())
 }
 
+// 训练验证
+fn validate(net: &Net, phone_price: &PhonePrice) -> f64 {
+    let mut correct = 0;
+
+    // 构建测试数据
+    let validate_index = phone_price.features.len() - VALIDATE_COUNTS - TEST_COUNTS;
+
+    for batch_index in 0..(VALIDATE_COUNTS / BATCH_SIZE) {
+        let start_index = validate_index + batch_index * BATCH_SIZE;
+        let end_index = start_index + BATCH_SIZE;
+
+        let test_dataset = Tensor::from_slice2(&phone_price.features[start_index..end_index])
+            .to_kind(Kind::Float)
+            .to_device(Device::cuda_if_available());
+
+        let vaild_dataset = Tensor::from_slice(&phone_price.labels[start_index..end_index])
+            .to_kind(Kind::Int64)
+            .to_device(Device::cuda_if_available());
+
+        // 运行模型
+        let output = net.forward(&test_dataset);
+
+        // 求出最大概率类别的下标
+        let predict = output.argmax(-1, true);
+
+        // 获取正确的类别
+        for index in 0..BATCH_SIZE {
+            let index = index as i64;
+            if predict.int64_value(&[index]) == vaild_dataset.int64_value(&[index]) {
+                correct += 1;
+            }
+        }
+    }
+
+    correct as f64 / TEST_COUNTS as f64
+}
+
 // 测试
 fn test(phone_price: &PhonePrice) -> Result<()> {
     let mut correct = 0;
     let mut vs = nn::VarStore::new(Device::cuda_if_available());
-    vs.load(MODEL_PATH)?;
 
     // 获取维度
     let features_dim = phone_price.features.first().unwrap().len() as i64;
@@ -162,6 +202,13 @@ fn test(phone_price: &PhonePrice) -> Result<()> {
         .len() as i64;
 
     let net = Net::new(&vs.root(), features_dim, labels_dim);
+
+    // 检查模型文件是否存在
+    if !std::path::Path::new(MODEL_PATH).exists() {
+        return Err(anyhow::anyhow!("Model file not found at {}", MODEL_PATH));
+    }
+
+    vs.load(MODEL_PATH)?;
 
     // 构建测试数据
     let test_index = phone_price.features.len() - TEST_COUNTS;
@@ -307,13 +354,14 @@ struct Net {
 
 impl Net {
     fn new(vs: &nn::Path, features_dim: i64, labels_dim: i64) -> Self {
-        let input_layer = nn::linear(vs, features_dim, 64, Default::default()); // 输入层到隐藏层
+        let input_layer = nn::linear(vs, features_dim, 128, Default::default()); // 输入层到隐藏层
 
         let mut hidden_layers = vec![];
-        hidden_layers.push(nn::linear(vs, 64, 128, Default::default()));
-        hidden_layers.push(nn::linear(vs, 128, 64, Default::default()));
+        hidden_layers.push(nn::linear(vs, 128, 256, Default::default()));
+        hidden_layers.push(nn::linear(vs, 256, 512, Default::default()));
+        hidden_layers.push(nn::linear(vs, 512, 128, Default::default()));
 
-        let output_layer = nn::linear(vs, 64, labels_dim, Default::default()); // 隐藏层到输出层
+        let output_layer = nn::linear(vs, 128, labels_dim, Default::default()); // 隐藏层到输出层
 
         Net {
             input_layer,
@@ -325,13 +373,37 @@ impl Net {
 
 impl Module for Net {
     fn forward(&self, xs: &Tensor) -> Tensor {
-        let mut xs = self.input_layer.forward(xs).relu().dropout(0.3, true);
+        let mut xs = self.input_layer.forward(xs).sigmoid();
 
         for layer in &self.hidden_layers {
-            xs = layer.forward(&xs).relu().dropout(0.5, true);
+            xs = layer.forward(&xs).sigmoid().dropout(0.2, true);
         }
 
         // 因为cross_entropy_loss已经对数据进行softmax，这里就不需要使用`sigmoid`函数了
         self.output_layer.forward(&xs)
     }
+}
+
+fn suffle_tensor_rows<T, U>(train_set: &mut [T], valid_set: &mut [U]) -> Result<()> {
+    assert_eq!(train_set.len(), valid_set.len());
+
+    let rand_rows = Tensor::randint(
+        train_set.len() as i64,
+        [1, train_set.len() as i64],
+        (Kind::Int64, Device::Cpu),
+    );
+
+    // 打乱数据
+    for (index, item) in rand_rows.squeeze().iter::<i64>()?.enumerate() {
+        let item = item as usize;
+
+        if index == item {
+            continue;
+        }
+
+        train_set.swap(index, item);
+        valid_set.swap(index, item);
+    }
+
+    Ok(())
 }
