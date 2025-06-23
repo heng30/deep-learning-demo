@@ -11,3 +11,4 @@ ndarray = "0.16"
 plotters = "0.3"
 ndarray-rand = "0.15"
 tch = { version = "0.20", features = ["download-libtorch"] }
+mylib = { path = "mylib" }

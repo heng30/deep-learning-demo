@@ -11,7 +11,7 @@ debug:
 	cargo run
 
 debug-show:
-	cargo run $(bin) && if [ -f $(output_image) ]; then $(image_viewer) $(output_image); fi
+	cargo run && if [ -f $(output_image) ]; then $(image_viewer) $(output_image); fi
 
 example:
 	cargo run --example $(bin)
