@@ -44,6 +44,9 @@ fn main() -> Result<()> {
     // 输入格式(batch, channel, height, width)
     let output = conv.forward(&input);
 
+    // 池化
+    output.max_pool2d([3], [1], [1], [0], false);
+
     // 移除第一个维度
     let output = output.squeeze();
 
