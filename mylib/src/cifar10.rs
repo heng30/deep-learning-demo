@@ -1,15 +1,18 @@
 use anyhow::Result;
 use flate2::read::GzDecoder;
+use reqwest::header::{HeaderMap, ACCEPT, CACHE_CONTROL, USER_AGENT};
 use std::fs::{self, File};
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use tch::Tensor;
+use tokio_stream::StreamExt;
 
 const CIFAR10_URL: &str = "https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz";
 const CIFAR10_DIR: &str = "data/cifar-10";
-const IMAGE_SIZE: i64 = 32;
-const CHANNELS: i64 = 3;
+const IMAGE_SIZE: i64 = 32; // 图片大小
+const CHANNELS: i64 = 3; // 每张图片的通道数
 
+#[derive(Debug)]
 pub struct Cifar10Dataset {
     pub dir: String,
     pub url: String,
@@ -19,8 +22,9 @@ pub struct Cifar10Dataset {
     pub test_images: Tensor,
     pub test_labels: Tensor,
 }
+
 impl Cifar10Dataset {
-    pub fn new(data_url: Option<&str>, save_dir: Option<&str>) -> Result<Cifar10Dataset> {
+    pub async fn new(data_url: Option<&str>, save_dir: Option<&str>) -> Result<Cifar10Dataset> {
         let url = data_url.unwrap_or(CIFAR10_URL);
         let dir = save_dir.unwrap_or(CIFAR10_DIR);
 
@@ -31,7 +35,7 @@ impl Cifar10Dataset {
 
         let archive_path = cifar10_dir.join("cifar-10-binary.tar.gz");
         if !archive_path.exists() {
-            Self::download_file(CIFAR10_URL, &archive_path)?;
+            Self::download_file(CIFAR10_URL, &archive_path).await?;
         }
 
         let train_files = [
@@ -63,11 +67,33 @@ impl Cifar10Dataset {
         })
     }
 
-    fn download_file(url: &str, path: &Path) -> Result<()> {
+    async fn download_file(url: &str, path: &Path) -> Result<()> {
         println!("Downloading {} to {}", url, path.display());
-        let response = reqwest::blocking::get(url)?;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(USER_AGENT, "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36".parse().unwrap());
+        headers.insert(ACCEPT, "*/*".parse().unwrap());
+        headers.insert(CACHE_CONTROL, "no-cache".parse().unwrap());
+
+        let client = reqwest::Client::new();
+        let mut response_stream = client
+            .get(url)
+            .headers(headers)
+            .send()
+            .await?
+            .bytes_stream();
+
+        let mut total_bytes = 0;
         let mut file = File::create(path)?;
-        std::io::copy(&mut response.bytes()?.as_ref(), &mut file)?;
+
+        while let Some(chunk_result) = response_stream.next().await {
+            let chunk = chunk_result?;
+
+            total_bytes += chunk.len();
+            println!("Downloaded {total_bytes} bytes");
+
+            file.write_all(&chunk)?;
+        }
         Ok(())
     }
 
@@ -98,8 +124,12 @@ impl Cifar10Dataset {
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer)?;
 
+        // 1个字节的label标签
         let num_images =
             buffer.len() / (1 + CHANNELS as usize * IMAGE_SIZE as usize * IMAGE_SIZE as usize);
+
+        println!("Numer of images: {num_images}");
+
         let mut images = Vec::with_capacity(num_images);
         let mut labels = Vec::with_capacity(num_images);
 

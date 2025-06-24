@@ -8,5 +8,11 @@ tar.workspace = true
 image.workspace = true
 anyhow.workspace = true
 flate2.workspace = true
-reqwest = { workspace = true, features = ["blocking"] }
+tokio-stream.workspace = true
+tokio = { workspace = true, features = ["full"] }
+reqwest = { workspace = true, features = ["stream"] }
 tch = { workspace = true, features = ["download-libtorch"] }
+
+[[bin]]
+name = "main"
+path = "bin/main.rs"
