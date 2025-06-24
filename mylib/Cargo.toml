@@ -14,5 +14,5 @@ reqwest = { workspace = true, features = ["stream"] }
 tch = { workspace = true, features = ["download-libtorch"] }
 
 [[bin]]
-name = "main"
+name = "mylib-main"
 path = "bin/main.rs"

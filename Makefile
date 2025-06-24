@@ -8,10 +8,10 @@ all:
 	cargo build --examples
 
 debug:
-	cargo run
+	cargo run --bin $(bin)
 
 debug-show:
-	cargo run && if [ -f $(output_image) ]; then $(image_viewer) $(output_image); fi
+	cargo run --bin $(bin) && if [ -f $(output_image) ]; then $(image_viewer) $(output_image); fi
 
 example:
 	cargo run --example $(bin)

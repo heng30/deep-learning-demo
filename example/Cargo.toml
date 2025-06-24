@@ -11,4 +11,9 @@ approx.workspace = true
 ndarray.workspace = true
 plotters.workspace = true
 ndarray-rand.workspace = true
+tokio = { workspace = true, features = ["full"] }
 tch = { workspace = true, features = ["download-libtorch"] }
+
+[[bin]]
+name = "main"
+path = "src/main.rs"

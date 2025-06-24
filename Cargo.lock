@@ -572,6 +572,7 @@ dependencies = [
  "ndarray-rand",
  "plotters",
  "tch",
+ "tokio",
 ]
 
 [[package]]
