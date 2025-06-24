@@ -1,8 +1,12 @@
 [package]
 name = "mylib"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-image = "0.25"
-anyhow = "1.0"
+tar.workspace = true
+image.workspace = true
+anyhow.workspace = true
+flate2.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
+tch = { workspace = true, features = ["download-libtorch"] }

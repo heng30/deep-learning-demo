@@ -1,0 +1,14 @@
+[package]
+name = "example"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+csv.workspace = true
+mylib.workspace = true
+anyhow.workspace = true
+approx.workspace = true
+ndarray.workspace = true
+plotters.workspace = true
+ndarray-rand.workspace = true
+tch = { workspace = true, features = ["download-libtorch"] }

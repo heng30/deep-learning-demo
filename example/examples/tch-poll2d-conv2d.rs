@@ -44,22 +44,31 @@ fn main() -> Result<()> {
     // 输入格式(batch, channel, height, width)
     let output = conv.forward(&input);
 
-    // 池化
-    output.max_pool2d([3], [1], [1], [0], false);
+    // 最大池化
+    let output_max_poll = output.max_pool2d([2, 2], [1, 1], [0, 0], [1, 1], false);
 
-    // 移除第一个维度
-    let output = output.squeeze();
+    // 平均池化
+    let output_avg_poll = output.avg_pool2d([2, 2], [1, 1], [1, 1], false, true, None);
 
-    assert_eq!(3, output.size()[0]);
+    let mut imgs = vec![];
+    for output in [output, output_max_poll, output_avg_poll] {
+        // 移除第一个维度
+        let output = output.squeeze();
 
-    let mut output_imgs = vec![];
-    for i in 0..3 {
-        let chan_img = output.i(i);
-        let (c, w, h) = conv2d_tensor_to_channel_image(&chan_img)?;
-        output_imgs.push(ImageView::channel_to_image(&c, w, h));
+        assert_eq!(3, output.size()[0]);
+        println!("{:?}", output.size());
+
+        let mut output_imgs = vec![];
+        for i in 0..3 {
+            let chan_img = output.i(i);
+            let (c, w, h) = conv2d_tensor_to_channel_image(&chan_img)?;
+            output_imgs.push(ImageView::channel_to_image(&c, w, h));
+        }
+
+        imgs.push(ImageView::horizontal_gray_images(output_imgs));
     }
 
-    let output_img = ImageView::horizontal_gray_images(output_imgs);
+    let output_img = ImageView::vertical_gray_images(imgs);
     output_img.save(OUTPUT_IMG)?;
 
     Ok(())

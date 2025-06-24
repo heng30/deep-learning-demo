@@ -146,8 +146,33 @@ impl ImageView {
             let (w, _) = img.dimensions();
 
             image::imageops::replace(&mut combined, &img, start_x, 0);
-
             start_x = start_x + w as i64;
+        }
+
+        image::DynamicImage::ImageLuma8(combined)
+    }
+
+    pub fn vertical_gray_images(imgs: Vec<DynamicImage>) -> DynamicImage {
+        let (mut width, mut height) = (0, 0);
+
+        for img in &imgs {
+            let (w, h) = img.dimensions();
+            height += h;
+
+            if w > width {
+                width = w;
+            }
+        }
+
+        let mut start_y = 0_i64;
+        let mut combined = GrayImage::new(width, height);
+
+        for img in imgs {
+            let img = img.into_luma8();
+            let (_, h) = img.dimensions();
+
+            image::imageops::replace(&mut combined, &img, 0, start_y);
+            start_y = start_y + h as i64;
         }
 
         image::DynamicImage::ImageLuma8(combined)

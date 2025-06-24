@@ -1,14 +1,42 @@
-[package]
-name = "deep-learning-demo"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+exclude = []
+resolver = "2"
+members = ["example", "mylib"]
 
-[dependencies]
+[workspace.package]
+license = "MIT"
+edition = "2024"
+version = "0.1.0"
+readme = "README.md"
+authors = ["Heng30 <rongheng30@gmail.com>"]
+keywords = ["Rust", "Deep Learning", "Demo"]
+homepage = "https://github.com/Heng30/deep-learning-demo"
+repository = "https://github.com/Heng30/deep-learning-demo"
+description = "Include deep learning demos"
+
+[profile.dev]
+debug = "full"
+incremental = true
+
+[profile.release]
+lto = true
+strip = true
+debug = false
+panic = "abort"
+opt-level = "s"
+codegen-units = 1
+incremental = true
+
+[workspace.dependencies]
+tar = "0.4"
 csv = "1.3"
+tch = "0.20"
+image = "0.25"
 anyhow = "1.0"
+flate2 = "1.1"
 approx = "0.5"
+reqwest = "0.12"
 ndarray = "0.16"
 plotters = "0.3"
 ndarray-rand = "0.15"
-tch = { version = "0.20", features = ["download-libtorch"] }
 mylib = { path = "mylib" }
