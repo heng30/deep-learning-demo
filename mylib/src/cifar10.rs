@@ -128,7 +128,7 @@ impl Cifar10Dataset {
         let num_images =
             buffer.len() / (1 + CHANNELS as usize * IMAGE_SIZE as usize * IMAGE_SIZE as usize);
 
-        println!("Numer of images: {num_images}");
+        // println!("Numer of images: {num_images}");
 
         let mut images = Vec::with_capacity(num_images);
         let mut labels = Vec::with_capacity(num_images);

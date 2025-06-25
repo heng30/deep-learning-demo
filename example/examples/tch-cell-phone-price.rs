@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use csv::Reader;
 use std::collections::HashSet;
 use tch::{
-    Device, Kind, Tensor,
     nn::{self, Module, OptimizerConfig},
+    Device, Kind, Tensor,
 };
 
 const BATCH_SIZE: usize = 8;
