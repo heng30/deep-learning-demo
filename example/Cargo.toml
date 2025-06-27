@@ -6,10 +6,12 @@ edition.workspace = true
 [dependencies]
 csv.workspace = true
 mylib.workspace = true
+regex.workspace = true
 anyhow.workspace = true
 approx.workspace = true
 ndarray.workspace = true
 plotters.workspace = true
+jieba-rs.workspace = true
 ndarray-rand.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tch = { workspace = true, features = ["download-libtorch"] }

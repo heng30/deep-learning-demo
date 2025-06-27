@@ -1,75 +1,79 @@
 use anyhow::Result;
 use jieba_rs::Jieba;
-use regex::Regex;
 use std::collections::{BTreeSet, HashMap};
 use tch::{
     nn::{self, ModuleT, Optimizer, OptimizerConfig, Sequential, VarStore, RNN},
     Device, Tensor,
 };
 
-const BATCH_SIZE: i64 = 1;
-const TRAINING_SET_COUNT: usize = 20000;
-const DATA_PATH: &str = "data/jaychou_lyrics.txt";
-
 fn main() -> Result<()> {
     // 设置随机种子以便结果可重现
     tch::manual_seed(0);
     let device = Device::cuda_if_available();
 
-    // 读取数据，并清洗数据
-    let sentence = std::fs::read_to_string(DATA_PATH)?;
-    println!("Sentence len: {:?}", sentence.len());
+    let sentence = "北京冬奥的进度条已经过半，不少外国运动员在完成自己的比赛后踏上归程。";
+    let tokens = tokenize_sentence(sentence);
+    println!("Tokens: {:?}", tokens);
 
-    let sentence = Vocabulary::clean_text(&sentence, TRAINING_SET_COUNT);
-    println!("Clean sentence len: {:?}", sentence.len());
-
-    let tokens = Vocabulary::tokenize_sentence(&sentence);
-    println!("Tokens len: {:?}", tokens.len());
-
-    // 构建词表
     let mut vocab = Vocabulary::new();
     vocab.add_words(tokens.clone());
 
-    println!("Vocabulary len: {}", vocab.len());
+    println!("Vocabulary size: {}", vocab.len());
+    println!("'北京' ID: {}", vocab.get_id("北京"));
+    println!("'地球' ID (unknown): {}", vocab.get_id("地球")); // 应该返回<unk>的ID
+    println!("ID 0 word: {:?}", vocab.get_word(0)); // 应该返回<unk>
 
-    // 构建嵌入层网络
+    // 1. 定义词汇表大小和嵌入维度
     let vocab_size = vocab.len();
-    let embedding_dim = 128;
+    let embedding_dim = 4; // 为了观察方便使用4。在具体训练中应该取一个比较大的值：128
+
+    // 3. 构建嵌入层网络
     let embedding_module = EmbeddingModule::new(vocab_size as i64, embedding_dim, device);
 
     let mut embedding_vetors = vec![];
-    for word in tokens.into_iter() {
-        let idx = vocab.get_id(&word) as i64;
+    println!("\n============= Embedding Vector=============");
+    for word in tokens.iter() {
+        let idx = vocab.get_id(word) as i64;
         let xs = Tensor::from(idx);
         let output = embedding_module.forward_t(&xs, true);
+
+        println!("{:?}", output);
         embedding_vetors.push(output);
     }
 
-    println!("embedding vector len: {}", embedding_vetors.len());
-
     println!("\n============= LSTM Vector=============");
-    let hidden_size = 256;
+    let hidden_size = 2; // 为了观察方便使用2。在具体训练中应该quo一个比较大的值：256
     let lstm_module = LstmModule::new(embedding_dim, hidden_size, device);
     for v in embedding_vetors.iter() {
-        // 形状由[hidden_size] -> [1, 1, hidden_size]
+        // 形状由[4] -> [1, 1, 4]
         let input = v.unsqueeze(0).unsqueeze(0);
 
         let (output, state) = lstm_module.forward(&input);
-        // println!("output size: {:?}", output.size());
-        // println!("state h size: {:?}", state.h().size());
-        // println!("state c size: {:?}", state.c().size());
-        //
-        // println!(
-        //     "output: {:?}\n",
-        //     output
-        //         .reshape([1, -1])
-        //         .squeeze()
-        //         .iter::<f64>()?
-        //         .collect::<Vec<_>>()
-        // );
+        println!("output size: {:?}", output.size());
+        println!("state h size: {:?}", state.h().size());
+        println!("state c size: {:?}", state.c().size());
+
+        println!(
+            "output: {:?}\n",
+            output
+                .reshape([1, -1])
+                .squeeze()
+                .iter::<f64>()?
+                .collect::<Vec<_>>()
+        );
     }
 
     Ok(())
+}
+
+// 分词
+fn tokenize_sentence(sentence: &str) -> Vec<String> {
+    let jieba = Jieba::new();
+    jieba
+        .cut(sentence, false)
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 // 词表
@@ -143,36 +147,6 @@ impl Vocabulary {
 
     pub fn is_empty(&self) -> bool {
         self.next_id == 0
-    }
-
-    // 分词
-    fn tokenize_sentence(sentence: &str) -> Vec<String> {
-        let jieba = Jieba::new();
-        jieba
-            .cut(sentence, false)
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect()
-    }
-
-    // 清理数据
-    pub fn clean_text(all_chars: &str, chars_count: usize) -> String {
-        // 替换换行符和回车符为空格
-        let replaced_newlines = all_chars.replace(['\n', '\r'], " ");
-
-        // 创建正则表达式来匹配非中文字符
-        let re = Regex::new(
-            r"[A-Za-z0-9\.\*\+\?\]\[＞＜<】〇〗〖\\\\【>!?>><<~/\u3000》,☆。！《》、`,～？…]",
-        )
-        .unwrap();
-
-        // 移除非中文字符
-        let chinese_only = re.replace_all(&replaced_newlines, "");
-
-        // 取前N个字符
-        let training_set: String = chinese_only.chars().take(chars_count).collect();
-
-        training_set
     }
 }
 
